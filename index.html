@@ -40,8 +40,10 @@
   .party-row{
     display:grid; grid-template-columns:26px 1.3fr .9fr .8fr 1fr 26px;
     gap:8px; align-items:center; margin:8px 0;
+    background:rgba(255,255,255,.02); border:1px solid rgba(255,255,255,.08); border-radius:10px; padding:8px;
   }
-  .party-row .handle{opacity:.6; text-align:center; font-size:12px}
+  .party-row .handle{opacity:.6; text-align:center; font-size:12px; cursor:grab}
+  .party-row.dragging{opacity:.6; outline:2px dashed rgba(255,255,255,.25)}
   .party-row .del{opacity:.8; cursor:pointer; text-align:center}
 
   .legend{display:flex; flex-wrap:wrap; gap:8px}
@@ -258,12 +260,56 @@ const defaultParties = [
   {name:"BSW",     color:"#FF6A00", pct:7}
 ];
 
-/* UI */
+/* ---------- Drag & Drop Reordering ---------- */
+function setupRowDnD(row){
+  row.setAttribute('draggable','true');
+  row.addEventListener('dragstart', onDragStart);
+  row.addEventListener('dragend', onDragEnd);
+}
+function onDragStart(e){
+  const row = e.currentTarget;
+  row.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain','party-row'); } catch(_) {}
+  const container = document.getElementById('partyList');
+  container.addEventListener('dragover', onDragOver);
+  container.addEventListener('drop', onDrop);
+}
+function onDragEnd(e){
+  const row = e.currentTarget;
+  row.classList.remove('dragging');
+  const container = document.getElementById('partyList');
+  container.removeEventListener('dragover', onDragOver);
+  container.removeEventListener('drop', onDrop);
+  calcAndRender();
+}
+function onDragOver(e){
+  e.preventDefault();
+  const container = e.currentTarget;
+  const dragging = container.querySelector('.party-row.dragging');
+  if(!dragging) return;
+  const after = getRowAfter(container, e.clientY);
+  if (after == null) container.appendChild(dragging);
+  else container.insertBefore(dragging, after);
+}
+function onDrop(e){ e.preventDefault(); }
+function getRowAfter(container, mouseY){
+  const rows = [...container.querySelectorAll('.party-row:not(.dragging)')];
+  let closest = {offset: Number.NEGATIVE_INFINITY, element: null};
+  rows.forEach(r=>{
+    const box = r.getBoundingClientRect();
+    const offset = mouseY - (box.top + box.height/2);
+    if (offset < 0 && offset > closest.offset){ closest = {offset, element:r}; }
+  });
+  return closest.element;
+}
+
+/* ---------- UI ---------- */
 function addPartyRow(p = {name:"Neue Partei", color:"#8888ff", pct:0, exception:false}){
   const row=document.createElement("div");
   row.className="party-row";
   row.innerHTML=`
-    <div class="handle">⋮⋮</div>
+    <div class="handle" title="Ziehen zum Sortieren">⋮⋮</div>
     <input class="pName" type="text" value="${p.name}">
     <input class="pPct" type="number" value="${p.pct}" min="0" max="100" step="0.1">
     <input class="pColor" type="color" value="${p.color}">
@@ -279,70 +325,7 @@ function addPartyRow(p = {name:"Neue Partei", color:"#8888ff", pct:0, exception:
 function setPartyList(list){ $("#partyList").innerHTML=""; list.forEach(addPartyRow); }
 function setDefaults(){ setPartyList(defaultParties); selectedCoalition = new Set(); calcAndRender(); }
 
-<script>
-// --- Drag & Drop Reordering ---
-function setupRowDnD(row){
-  row.setAttribute('draggable','true');
-  row.addEventListener('dragstart', onDragStart);
-  row.addEventListener('dragend', onDragEnd);
-}
-
-function onDragStart(e){
-  const row = e.currentTarget;
-  row.classList.add('dragging');
-  // merke ID/Index
-  e.dataTransfer.effectAllowed = 'move';
-  try { e.dataTransfer.setData('text/plain','party-row'); } catch(_) {}
-  // Delegiere an Container
-  const container = document.getElementById('partyList');
-  container.addEventListener('dragover', onDragOver);
-  container.addEventListener('drop', onDrop);
-}
-
-function onDragEnd(e){
-  const row = e.currentTarget;
-  row.classList.remove('dragging');
-  const container = document.getElementById('partyList');
-  container.removeEventListener('dragover', onDragOver);
-  container.removeEventListener('drop', onDrop);
-  // Nach Reorder neu berechnen
-  calcAndRender();
-}
-
-function onDragOver(e){
-  e.preventDefault(); // wichtig, damit Drop möglich ist
-  const container = e.currentTarget;
-  const dragging = container.querySelector('.party-row.dragging');
-  if(!dragging) return;
-
-  const after = getRowAfter(container, e.clientY);
-  if (after == null){
-    container.appendChild(dragging);
-  } else {
-    container.insertBefore(dragging, after);
-  }
-}
-
-function onDrop(e){
-  e.preventDefault();
-  // Reihenfolge ist bereits im DOM angepasst; Ende-Handler macht den Rest
-}
-
-function getRowAfter(container, mouseY){
-  const rows = [...container.querySelectorAll('.party-row:not(.dragging)')];
-  let closest = {offset: Number.NEGATIVE_INFINITY, element: null};
-  rows.forEach(r=>{
-    const box = r.getBoundingClientRect();
-    const offset = mouseY - (box.top + box.height/2);
-    // Wir suchen das Element mit Offset < 0, das am nächsten an der Maus liegt
-    if (offset < 0 && offset > closest.offset){
-      closest = {offset, element:r};
-    }
-  });
-  return closest.element; // null ⇒ ans Ende
-}
-</script>
-/* Verfahren */
+/* ---------- Verfahren ---------- */
 function filterByThreshold(parties, threshold, exceptions){
   return parties.filter(p =>
     !isOther(p.name) &&
@@ -383,7 +366,7 @@ function computeSeats(parties,seats,threshold,exceptions,method){
   return result;
 }
 
-/* Zeichnen & Layout */
+/* ---------- Zeichnen & Layout ---------- */
 function layoutArcs(data,total,sel){
   const coal = data.filter(p=>p.seats>0 && sel.has(p.name));
   const rest = data.filter(p=>p.seats>0 && !sel.has(p.name));
@@ -433,7 +416,7 @@ function drawHalfRing(svg,data,total,sel){
   $("#majorityLbl").textContent = (Math.floor(total/2)+1).toString();
 }
 
-/* Legend & Koalitionen-UI */
+/* ---------- Legend & Koalitionen-UI ---------- */
 function renderLegend(d){
   const el=$("#legend"); el.innerHTML="";
   d.filter(p=>p.seats>0 && !isOther(p.name)).forEach(p=>{
@@ -461,7 +444,7 @@ function renderChecklist(d){
   });
 }
 
-/* Koalitionssumme */
+/* ---------- Koalitionssumme ---------- */
 function recomputeCoalitionSum(){
   const totalSeats = parseInt($("#totalSeats").value)||0;
   const majority   = Math.floor(totalSeats/2)+1;
@@ -473,7 +456,7 @@ function recomputeCoalitionSum(){
   $("#coalMajority").className   = ok ? "ok" : "bad";
 }
 
-/* History */
+/* ---------- History ---------- */
 function getHistData(){ try{ return JSON.parse(document.getElementById("HIST_DATA").textContent); }catch(e){ return {}; } }
 function fillHistoryDropdown(){
   const hist = getHistData();
@@ -493,7 +476,7 @@ function parseCSV(text){
   });
 }
 
-/* Haupt-Loop */
+/* ---------- Haupt-Loop ---------- */
 function readInputs(){
   const partyRows=$$("#partyList .party-row");
   const parties=partyRows.map(r=>({
@@ -526,7 +509,7 @@ function calcAndRender(){
   recomputeCoalitionSum();
 }
 
-/* Events */
+/* ---------- Events ---------- */
 $("#addRowBtn").addEventListener("click", ()=>{ addPartyRow(); calcAndRender(); });
 $("#resetBtn").addEventListener("click", setDefaults);
 $("#calcBtn").addEventListener("click", calcAndRender);
@@ -569,7 +552,7 @@ setDefaults();
     <div class="ard-head">
       <div>
         <div class="ard-title">Prognose – ARD-Stil (inoffiziell)</div>
-        <div class="ard-sub">Basis: deine aktuellen Eingaben – Säulen wachsen pro Klick</div>
+        <div class="ard-sub">Basis: deine aktuellen Eingaben – Säulen wachsen pro Klick (Reihenfolge = Eingabetabelle)</div>
       </div>
       <button class="ard-btn" id="closeForecast">Schließen</button>
     </div>
@@ -605,13 +588,12 @@ document.getElementById("closeForecast").addEventListener("click", ()=> {
 });
 document.getElementById("resetBars").addEventListener("click", resetForecast);
 document.getElementById("nextBarBtn").addEventListener("click", animateNextBar);
-// Bonus: Klick auf Chart animiert ebenfalls nächste Partei
+// Optional: Klick auf das Chart selbst animiert ebenfalls die nächste Partei
 document.getElementById("forecastChart").addEventListener("click", animateNextBar);
 
 // Daten aus aktuellen Eingaben holen – **Eingabereihenfolge**
 function buildForecastData(){
   const inp = readInputs();
-  // Reihenfolge wie in der Liste, keine Sortierung
   forecastList = inp.parties
     .filter(p=>p && p.name && !isOther(p.name) && (p.pct||0)>=0)
     .map(p=>({...p, shownPct:0}));
@@ -629,6 +611,10 @@ function openForecast(){
 function initForecastChart(){
   const ctx = document.getElementById("forecastChart");
   if (forecastChart) { forecastChart.destroy(); }
+
+  const maxPct = Math.max(0, ...forecastList.map(p=>p.pct||0));
+  const suggested = Math.max(30, Math.ceil(maxPct + 5));
+
   forecastChart = new Chart(ctx, {
     type: "bar",
     data: {
@@ -640,9 +626,9 @@ function initForecastChart(){
         borderColor: "transparent",   // kein Rand
         borderWidth: 0,
         borderSkipped: false,
-        barThickness: 68,             // dicke Balken
-        maxBarThickness: 80,
-        categoryPercentage: 0.66,     // etwas enger
+        barThickness: 72,             // dicke Balken
+        maxBarThickness: 86,
+        categoryPercentage: 0.64,     // etwas enger
         barPercentage: 0.90
       }]
     },
@@ -655,7 +641,7 @@ function initForecastChart(){
         datalabels: {
           color: "#ffffff",
           anchor: "end",              // an der Oberkante des Balkens
-          align: "end",               // außerhalb oberhalb
+          align: "top",               // außerhalb oberhalb
           offset: 8,                  // Abstand nach oben
           clip: false,                // außerhalb zeichnen erlauben
           font: { weight: "bold", size: 16 },
@@ -669,7 +655,7 @@ function initForecastChart(){
         },
         y: {
           beginAtZero: true,
-          suggestedMax: Math.max(30, Math.ceil(Math.max(...forecastList.map(p=>p.pct||0)) + 5)),
+          suggestedMax: suggested,
           grid: { display: false },          // KEINE Linien (auch nicht gestrichelt)
           ticks: { color:"#ffffff", font:{ size: 12 }, callback: v => v + "%" }
         }
@@ -683,6 +669,7 @@ function initForecastChart(){
 function resetForecast(){
   forecastIndex = 0;
   forecastList.forEach(p => p.shownPct = 0);
+  if (!forecastChart) return;
   forecastChart.data.datasets[0].data = forecastList.map(p=>0);
   forecastChart.update();
 }
